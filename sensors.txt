@@ -1,0 +1,40 @@
+iwlwifi_1-virtual-0
+Adapter: Virtual device
+temp1:        +44.0°C  
+
+spd5118-i2c-16-50
+Adapter: SMBus PIIX4 adapter port 0 at 0b00
+temp1:        +40.8°C  (low  =  +0.0°C, high = +55.0°C)
+                       (crit low =  +0.0°C, crit = +85.0°C)
+
+r8169_0_100:00-mdio-0
+Adapter: MDIO adapter
+temp1:        +48.0°C  (high = +120.0°C)
+
+amdgpu-pci-c400
+Adapter: PCI adapter
+vddgfx:        1.18 V  
+vddnb:       758.00 mV 
+edge:         +42.0°C  
+PPT:          10.02 W  (avg =  11.15 W)
+
+acpitz-acpi-0
+Adapter: ACPI interface
+temp1:        +20.0°C  
+
+spd5118-i2c-16-51
+Adapter: SMBus PIIX4 adapter port 0 at 0b00
+temp1:        +35.2°C  (low  =  +0.0°C, high = +55.0°C)
+                       (crit low =  +0.0°C, crit = +85.0°C)
+
+k10temp-pci-00c3
+Adapter: PCI adapter
+Tctl:         +49.9°C  
+
+nvme-pci-0300
+Adapter: PCI adapter
+Composite:    +33.9°C  (low  = -273.1°C, high = +81.8°C)
+                       (crit = +84.8°C)
+Sensor 1:     +33.9°C  (low  = -273.1°C, high = +65261.8°C)
+Sensor 2:     +33.9°C  (low  = -273.1°C, high = +65261.8°C)
+

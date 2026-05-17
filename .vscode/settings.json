@@ -1,0 +1,29 @@
+{
+  "github.copilot.enable": {
+    "*": false
+  },
+  "python.languageServer": "Pylance",
+  "terminal.integrated.gpuAcceleration": "off",
+
+  "files.watcherExclude": {
+    "**/.git/**": true,
+    "**/.pio/**": true,
+    "**/.venv/**": true,
+    "**/venv/**": true,
+    "**/__pycache__/**": true,
+    "**/.vscode/ipch/**": true
+  },
+
+  "search.exclude": {
+    "**/.pio/**": true,
+    "**/.venv/**": true,
+    "**/venv/**": true,
+    "**/__pycache__/**": true,
+    "**/.vscode/ipch/**": true
+  },
+
+  "files.exclude": {
+    "**/.pio": true,
+    "**/.vscode/ipch": true
+  }
+}

@@ -1,4 +1,4 @@
-#!/home/peter/Development/python/pvfclock/.venv/bin/python
+#!/usr/bin/env python
 import sys
 from mycalendar import CalendarApp
 from PyQt5.QtWidgets import QApplication, QMainWindow, QLCDNumber, QLabel, QVBoxLayout, QWidget, QSizeGrip, QStatusBar, QAction
@@ -6,20 +6,22 @@ from PyQt5.QtGui import QIcon, QPalette, QColor
 from PyQt5.QtCore import QTime, QTimer, Qt
 from datetime import date
 
-from config import read_config, write_config
+from app_config import AppConfig, DEFAULT_CONFIG
+from monitor_controller import MonitorController
+from monitor_panel import MonitorPanel
 
 
 lcd_margin = 1  # Define the LCD container margin
 win_margin = 1  # Define the window margin
-params = { # define default parameters to ba saved in config_file_path = expanduser("~/.config/pvfclock.conf") see config.py file
-        'x': 2250,
-        'y': 40,
-        'w': 300,
-        'h': 140,
-        'lcd_back': '#006400',
-        'lcd_face': '#7fff00',
-        'clock_back': '#2f4f4f',
-        'icon' : '/usr/share/icons/hicolor/scalable/apps/org.gnome.clocks.svg'
+params = {
+        'x': DEFAULT_CONFIG["clock"]["geometry"]["x"],
+        'y': DEFAULT_CONFIG["clock"]["geometry"]["y"],
+        'w': DEFAULT_CONFIG["clock"]["geometry"]["w"],
+        'h': DEFAULT_CONFIG["clock"]["geometry"]["h"],
+        'lcd_back': DEFAULT_CONFIG["clock"]["colors"]["lcd_back"],
+        'lcd_face': DEFAULT_CONFIG["clock"]["colors"]["lcd_face"],
+        'clock_back': DEFAULT_CONFIG["clock"]["colors"]["clock_back"],
+        'icon' : DEFAULT_CONFIG["clock"]["icon"]
 }
 
 class CustomStatusBar(QStatusBar):
@@ -54,8 +56,11 @@ class DigitalClock(QLCDNumber):
         self.display(text)
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, app_config):
         super().__init__()
+        self.app_config = app_config
+        self.monitor_panel = MonitorPanel(app_config)
+        self.monitor_controller = MonitorController(app_config, self.monitor_panel)
         # Create the main layout
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(win_margin, win_margin, win_margin, win_margin)
@@ -110,17 +115,22 @@ class MainWindow(QMainWindow):
         self.move(params['x'], params['y'])
         self.setWindowTitle("DCLOCK")
         self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.WindowSystemMenuHint)
-        main_window_background = f"background-color: {params['clock_back']};"
-        shared_style = """
-            background-color: #000000;
-            color: #ffffff;
-            border: 1px solid #ffffff;
-        """
-        self.setStyleSheet(
-            f"QWidget {{ {main_window_background} }} QToolTip {{ {shared_style} }} QMenu {{ {shared_style} }}"
-        )
+        self.apply_clock_style()
+        self.toggleMonitorAction = QAction(
+                "Toggle Monitor", self,
+                shortcut=str(self.app_config.get("monitor_panel.shortcut", "Ctrl+1")),
+                triggered=self.toggle_monitor)
+        self.toggleMonitorAction.setShortcutContext(Qt.ApplicationShortcut)
+        self.addAction(self.toggleMonitorAction)
+        self.reloadConfigAction = QAction(
+                "Reload Config", self,
+                shortcut=str(self.app_config.get("app.reload_shortcut", "Ctrl+R")),
+                triggered=self.reload_config)
+        self.reloadConfigAction.setShortcutContext(Qt.ApplicationShortcut)
+        self.addAction(self.reloadConfigAction)
         quitAction = QAction("E&xit", self, shortcut="Ctrl+Q",
                 triggered=QApplication.instance().quit)
+        quitAction.setShortcutContext(Qt.ApplicationShortcut)
         self.addAction(quitAction)
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
         self.setToolTip("Drag the clock with the left mouse button.\n"
@@ -137,9 +147,11 @@ class MainWindow(QMainWindow):
 
         self.show()
         self.update_lcd_geometry()
+        self.dock_monitor_panel()
+        self.monitor_controller.start()
 
     def mouseDoubleClickEvent(self, event):
-        write_config({
+        self.app_config.update_clock_params({
             'x': self.pos().x(),
             'y': self.pos().y(),
             'w': self.width(),
@@ -150,14 +162,49 @@ class MainWindow(QMainWindow):
             'icon' : params['icon']
         })
 
-    def show_calendar(self, event):
+    def show_calendar(self, event=None):
         self.calendar_app = CalendarApp()
-        x, y = self.pos().x() + 0, self.pos().y() + self.size().height() + 40
+        anchor = self.monitor_panel if self.monitor_panel.isVisible() else self
+        x, y = self.pos().x(), anchor.pos().y() + anchor.size().height() + 40
         self.calendar_app.move(x, y)
+
+    def toggle_monitor(self):
+        if self.monitor_panel.isVisible():
+            self.monitor_panel.hide()
+            return
+        self.dock_monitor_panel()
+        self.monitor_panel.show()
+        self.monitor_controller.poll()
+
+    def reload_config(self):
+        global params
+        was_panel_visible = self.monitor_panel.isVisible()
+        try:
+            self.app_config = AppConfig.load(self.app_config.path)
+        except Exception as error:
+            print(f"Error reloading config: {error}")
+            self.statusBar().showMessage(f"Config reload failed: {error}", 5000)
+            return
+        params = self.app_config.clock_params()
+        self.toggleMonitorAction.setShortcut(str(self.app_config.get("monitor_panel.shortcut", "Ctrl+1")))
+        self.reloadConfigAction.setShortcut(str(self.app_config.get("app.reload_shortcut", "Ctrl+R")))
+        self.apply_clock_style()
+        self.monitor_panel.apply_config(self.app_config)
+        self.monitor_controller.configure(self.app_config)
+        self.dock_monitor_panel()
+        if was_panel_visible:
+            self.monitor_panel.show()
+            self.monitor_controller.poll()
+            self.dock_monitor_panel()
+        self.statusBar().showMessage("Config reloaded", 3000)
+
+    def dock_monitor_panel(self):
+        self.monitor_panel.dock_to_clock(self)
 
     def mouseMoveEvent(self, event):
         newPos = event.globalPos() - self.offset
         self.move(newPos)
+        self.dock_monitor_panel()
 
     def mousePressEvent(self, event):
         self.offset = event.pos()
@@ -166,16 +213,52 @@ class MainWindow(QMainWindow):
     def close_application(self):
         self.close()
 
+    def closeEvent(self, event):
+        self.monitor_controller.stop()
+        self.monitor_panel.close()
+        super().closeEvent(event)
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if hasattr(self, "monitor_panel") and self.monitor_panel.isVisible():
+            self.dock_monitor_panel()
+
     def resizeEvent(self, event):
+        super().resizeEvent(event)
         self.update_lcd_geometry()
+        if hasattr(self, "monitor_panel") and self.monitor_panel.isVisible():
+            self.dock_monitor_panel()
 
     def update_lcd_geometry(self):
         lcd_container_size = self.lcd_container.size()
         self.lcd1.setGeometry(0, 0, lcd_container_size.width(), lcd_container_size.height())
         self.lcd2.setGeometry(0, 0, lcd_container_size.width(), lcd_container_size.height())
 
+    def apply_clock_style(self):
+        self.statusBar().setStyleSheet(f"color: {params['lcd_face']}; background: {params['clock_back']};")
+        palette1 = self.lcd1.palette()
+        palette1.setColor(palette1.WindowText, QColor(params['lcd_back']))
+        self.lcd1.setPalette(palette1)
+        palette2 = self.lcd2.palette()
+        palette2.setColor(palette2.WindowText, QColor(params['lcd_face']))
+        self.lcd2.setPalette(palette2)
+        main_window_background = f"background-color: {params['clock_back']};"
+        shared_style = """
+            background-color: #000000;
+            color: #ffffff;
+            border: 1px solid #ffffff;
+        """
+        self.setStyleSheet(
+            f"QWidget {{ {main_window_background} }} QToolTip {{ {shared_style} }} QMenu {{ {shared_style} }}"
+        )
+        try:
+            self.setWindowIcon(QIcon(params['icon']))
+        except Exception as e:
+            print(f"Error loading icon: {e}")
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    params = read_config(params)
-    window = MainWindow()
+    app_config = AppConfig.load()
+    params = app_config.clock_params()
+    window = MainWindow(app_config)
     sys.exit(app.exec_())

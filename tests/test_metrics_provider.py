@@ -396,3 +396,122 @@ def test_network_missing_interface_is_skipped() -> None:
     provider = SystemMetricsProvider(config=config, psutil_module=FakePsutil)
 
     assert provider.network() == []
+
+
+def test_external_ip_fetches_and_formats_identity() -> None:
+    config = deepcopy(DEFAULT_CONFIG)
+    config["metrics"]["external_ip"]["enabled"] = True
+    calls = []
+
+    def fake_fetch(timeout_seconds):
+        calls.append(timeout_seconds)
+        return {"ip": "203.0.113.10", "country_code": "PL", "country": "Poland", "flag": ""}
+
+    provider = SystemMetricsProvider(
+        config=config,
+        external_ip_fetcher=fake_fetch,
+        run_command=_route_command("enp198s0f4u1u1"),
+        time_func=lambda: 100.0,
+    )
+
+    metric = provider.external_ip()
+
+    assert calls == [3.0]
+    assert metric == MetricValue(
+        key="external_ip",
+        label="WAN",
+        value=0.0,
+        display_value="203.0.113.10 PL",
+        unit="",
+        available=True,
+    )
+
+
+def test_external_ip_uses_cache_until_ttl_expires() -> None:
+    config = deepcopy(DEFAULT_CONFIG)
+    config["metrics"]["external_ip"]["enabled"] = True
+    config["metrics"]["external_ip"]["refresh_seconds"] = 3600
+    fetches = [
+        {"ip": "203.0.113.10", "country_code": "PL", "country": "Poland", "flag": ""},
+        {"ip": "198.51.100.20", "country_code": "DE", "country": "Germany", "flag": ""},
+    ]
+    times = [100.0, 200.0, 3800.0]
+
+    provider = SystemMetricsProvider(
+        config=config,
+        external_ip_fetcher=lambda timeout_seconds: fetches.pop(0),
+        run_command=_route_command("enp1s0"),
+        time_func=lambda: times.pop(0),
+    )
+
+    first = provider.external_ip()
+    cached = provider.external_ip()
+    refreshed = provider.external_ip()
+
+    assert first.display_value == "203.0.113.10 PL"
+    assert cached.display_value == "203.0.113.10 PL"
+    assert refreshed.display_value == "198.51.100.20 DE"
+
+
+def test_external_ip_refreshes_when_route_interface_changes() -> None:
+    config = deepcopy(DEFAULT_CONFIG)
+    config["metrics"]["external_ip"]["enabled"] = True
+    config["metrics"]["external_ip"]["refresh_seconds"] = 3600
+    fetches = [
+        {"ip": "198.51.100.20", "country_code": "DE", "country": "Germany", "flag": ""},
+        {"ip": "203.0.113.10", "country_code": "PL", "country": "Poland", "flag": ""},
+    ]
+    routes = ["enp1s0", "enp198s0f4u1u1"]
+
+    provider = SystemMetricsProvider(
+        config=config,
+        external_ip_fetcher=lambda timeout_seconds: fetches.pop(0),
+        run_command=lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=f"default via 192.0.2.1 dev {routes.pop(0)} proto dhcp\n",
+            stderr="",
+        ),
+        time_func=lambda: 100.0,
+    )
+
+    first = provider.external_ip()
+    refreshed = provider.external_ip()
+
+    assert first.display_value == "198.51.100.20 DE"
+    assert refreshed.display_value == "203.0.113.10 PL"
+
+
+def test_external_ip_expected_country_mismatch_sets_alarm_value() -> None:
+    config = deepcopy(DEFAULT_CONFIG)
+    config["metrics"]["external_ip"]["enabled"] = True
+    config["metrics"]["external_ip"]["alarm"]["expected_by_interface"] = {"enp198s0f4u1u1": "PL"}
+
+    provider = SystemMetricsProvider(
+        config=config,
+        external_ip_fetcher=lambda timeout_seconds: {
+            "ip": "198.51.100.20",
+            "country_code": "DE",
+            "country": "Germany",
+            "flag": "",
+        },
+        run_command=_route_command("enp198s0f4u1u1"),
+        time_func=lambda: 100.0,
+    )
+
+    metric = provider.external_ip()
+
+    assert metric.value == 1.0
+    assert metric.display_value == "198.51.100.20 DE"
+
+
+def _route_command(interface_name: str):
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=f"default via 192.0.2.1 dev {interface_name} proto dhcp\n",
+            stderr="",
+        )
+
+    return fake_run

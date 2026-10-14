@@ -53,6 +53,9 @@ metrics:
     assert config.get("metrics.cpu.alarm.max") == 90
     assert config.get("metrics.cpu.alarm.color") == "#ff5555"
     assert config.get("metrics.network.enabled") is False
+    assert config.get("metrics.external_ip.enabled") is False
+    assert config.get("metrics.external_ip.text.enabled") is True
+    assert config.get("metrics.external_ip.refresh_seconds") == 3600
     assert config.get("metrics.temperatures.chips.k10temp-pci-00c3.features.Tctl.graph.enabled") is True
     assert config.get("metrics.temperatures.chips.k10temp-pci-00c3.features.Tctl.alarm.color") == "#ff5555"
 

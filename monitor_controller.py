@@ -83,6 +83,10 @@ class MonitorController:
         history = {key: buffer.as_list() for key, buffer in self.history.items()}
         self.panel.set_metrics(metrics, history)
 
+    def refresh_external_ip(self) -> None:
+        self.provider.force_external_ip_refresh()
+        self.poll()
+
     def _history_for(self, key: str) -> HistoryBuffer:
         if key not in self.history:
             self.history[key] = HistoryBuffer(self.capacity)

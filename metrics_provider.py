@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import os
 import subprocess
 import time
 from typing import Any, Callable
+from urllib.request import urlopen
 
 from app_config import DEFAULT_CONFIG
 from sensors_parser import SensorReading, parse_sensors_output
@@ -33,6 +35,7 @@ class SystemMetricsProvider:
         loadavg_func: Callable[[], tuple[float, float, float]] = os.getloadavg,
         run_command: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
         time_func: Callable[[], float] = time.monotonic,
+        external_ip_fetcher: Callable[[float], dict[str, Any]] | None = None,
         sensors_timeout_seconds: float = 2.0,
     ):
         self.config = config or DEFAULT_CONFIG
@@ -40,8 +43,13 @@ class SystemMetricsProvider:
         self.loadavg_func = loadavg_func
         self.run_command = run_command
         self.time_func = time_func
+        self.external_ip_fetcher = external_ip_fetcher or _fetch_external_ip
         self.sensors_timeout_seconds = sensors_timeout_seconds
         self._last_network_sample: tuple[float, dict[str, tuple[int, int]]] | None = None
+        self._external_ip_cache: dict[str, Any] | None = None
+        self._external_ip_cache_time = 0.0
+        self._external_ip_route_interface: str | None = None
+        self._force_external_ip_refresh = False
 
     def collect(self) -> list[MetricValue]:
         values: list[MetricValue] = []
@@ -55,7 +63,12 @@ class SystemMetricsProvider:
             values.extend(self.temperatures())
         if self._enabled("metrics.network"):
             values.extend(self.network())
+        if self._enabled("metrics.external_ip"):
+            values.append(self.external_ip())
         return values
+
+    def force_external_ip_refresh(self) -> None:
+        self._force_external_ip_refresh = True
 
     def system_load(self) -> MetricValue:
         label = str(self._get("metrics.system_load.label", "System Load"))
@@ -244,6 +257,90 @@ class SystemMetricsProvider:
 
         return values
 
+    def external_ip(self) -> MetricValue:
+        label = str(self._get("metrics.external_ip.label", "WAN"))
+        now = float(self.time_func())
+        route_interface = self._default_route_interface()
+        refresh_seconds = float(self._get("metrics.external_ip.refresh_seconds", 3600))
+        timeout_seconds = float(self._get("metrics.external_ip.timeout_seconds", 3))
+        refresh_on_route_change = bool(self._get("metrics.external_ip.refresh_on_route_change", True))
+        route_changed = (
+            refresh_on_route_change
+            and route_interface is not None
+            and route_interface != self._external_ip_route_interface
+        )
+        stale = self._external_ip_cache is None or now - self._external_ip_cache_time >= refresh_seconds
+
+        if self._force_external_ip_refresh or route_changed or stale:
+            self._force_external_ip_refresh = False
+            try:
+                self._external_ip_cache = self.external_ip_fetcher(timeout_seconds)
+                self._external_ip_cache_time = now
+                self._external_ip_route_interface = route_interface
+            except Exception as error:
+                if self._external_ip_cache is None:
+                    return self._unavailable("external_ip", label, "", error)
+                self._external_ip_cache_time = now
+                self._external_ip_route_interface = route_interface
+
+        if self._external_ip_cache is None:
+            return self._unavailable("external_ip", label, "", "external IP unavailable")
+
+        ip_address = str(self._external_ip_cache.get("ip") or "n/a")
+        country_code = str(self._external_ip_cache.get("country_code") or "").upper()
+        country = str(self._external_ip_cache.get("country") or country_code)
+        display_parts = [ip_address]
+        if country_code:
+            display_parts.append(country_code)
+
+        expected_country = self._expected_country_for_interface(route_interface)
+        mismatch = (
+            expected_country is not None
+            and country_code
+            and country_code.upper() != expected_country.upper()
+        )
+        return MetricValue(
+            key="external_ip",
+            label=label,
+            value=1.0 if mismatch else 0.0,
+            display_value=" ".join(display_parts) if display_parts else country,
+            unit="",
+            available=True,
+        )
+
+    def _default_route_interface(self) -> str | None:
+        try:
+            result = self.run_command(
+                ["ip", "route", "show", "default"],
+                capture_output=True,
+                text=True,
+                timeout=1.0,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return None
+        if result.returncode != 0:
+            return None
+
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if "dev" not in parts:
+                continue
+            dev_index = parts.index("dev")
+            if dev_index + 1 < len(parts):
+                return parts[dev_index + 1]
+        return None
+
+    def _expected_country_for_interface(self, interface_name: str | None) -> str | None:
+        if interface_name is None:
+            return None
+        expected = self._get("metrics.external_ip.alarm.expected_by_interface", {})
+        if not isinstance(expected, dict):
+            return None
+        country_code = expected.get(interface_name)
+        if country_code is None:
+            return None
+        return str(country_code)
+
     def _enabled(self, dotted_key: str) -> bool:
         return bool(self._get(f"{dotted_key}.enabled", False))
 
@@ -275,3 +372,27 @@ def _format_bytes(value: float) -> str:
             return f"{size:.1f} {unit}"
         size /= 1024.0
     return f"{size:.1f} TiB"
+
+
+def _fetch_external_ip(timeout_seconds: float) -> dict[str, Any]:
+    with urlopen("https://ipwho.is/", timeout=timeout_seconds) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict) or payload.get("success") is False:
+        raise ValueError("external IP lookup failed")
+    flag = ""
+    flag_data = payload.get("flag")
+    if isinstance(flag_data, dict):
+        flag = str(flag_data.get("emoji") or "")
+    return {
+        "ip": payload.get("ip"),
+        "country": payload.get("country"),
+        "country_code": payload.get("country_code"),
+        "flag": flag,
+    }
+
+
+def _flag_for_country_code(country_code: str) -> str:
+    if len(country_code) != 2 or not country_code.isalpha():
+        return ""
+    base = 0x1F1E6
+    return "".join(chr(base + ord(letter.upper()) - ord("A")) for letter in country_code)

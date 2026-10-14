@@ -188,6 +188,8 @@ class MonitorPanel(QWidget):
     def _graph_enabled_for_metric(self, metric: MetricValue) -> bool:
         key = metric.key
         if not key.startswith("temperature."):
+            if key == "external_ip":
+                return bool(self.app_config.get("metrics.external_ip.graph.enabled", False))
             if key.startswith("network."):
                 feature_config = self._network_feature_config(key)
                 if feature_config is not None:
@@ -206,6 +208,8 @@ class MonitorPanel(QWidget):
     def _text_enabled_for_metric(self, metric: MetricValue) -> bool:
         key = metric.key
         if not key.startswith("temperature."):
+            if key == "external_ip":
+                return bool(self.app_config.get("metrics.external_ip.text.enabled", True))
             if key.startswith("network."):
                 feature_config = self._network_feature_config(key)
                 if feature_config is not None:
@@ -269,6 +273,11 @@ class MonitorPanel(QWidget):
             return self._alarm_config("metrics.cpu.alarm")
         if key == "memory":
             return self._alarm_config("metrics.memory.alarm")
+        if key == "external_ip":
+            alarm_config = self._alarm_config("metrics.external_ip.alarm")
+            if "expected_by_interface" in alarm_config:
+                return {"max": 1, "color": alarm_config.get("color", "#ff5555")}
+            return {}
         if key.startswith("network."):
             feature_config = self._network_feature_config(key)
             if feature_config is None:

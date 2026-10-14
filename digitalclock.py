@@ -194,7 +194,7 @@ class MainWindow(QMainWindow):
         self.dock_monitor_panel()
         if was_panel_visible:
             self.monitor_panel.show()
-            self.monitor_controller.poll()
+            self.monitor_controller.refresh_external_ip()
             self.dock_monitor_panel()
         self.statusBar().showMessage("Config reloaded", 3000)
 

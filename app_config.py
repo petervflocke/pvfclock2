@@ -125,6 +125,19 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "enabled": False,
             "interfaces": {},
         },
+        "external_ip": {
+            "enabled": False,
+            "label": "WAN",
+            "refresh_seconds": 3600,
+            "refresh_on_route_change": True,
+            "timeout_seconds": 3,
+            "graph": {"enabled": False},
+            "text": {"enabled": True},
+            "alarm": {
+                "expected_by_interface": {},
+                "color": "#ff5555",
+            },
+        },
     },
 }
 
@@ -288,7 +301,7 @@ def _merge_metric_display_defaults(data: dict[str, Any], loaded: dict[str, Any])
     if not isinstance(metrics, dict):
         return changed
 
-    for metric_name in ("system_load", "cpu", "memory"):
+    for metric_name in ("system_load", "cpu", "memory", "external_ip"):
         metric_config = metrics.get(metric_name, {})
         if not isinstance(metric_config, dict):
             continue

@@ -1,0 +1,1 @@
+alarm.wav is an original synthesized 880 Hz notification tone generated for this project. No third-party recording or additional audio dependency is used. Playback uses PyQt5 QtMultimedia QSoundEffect when available.

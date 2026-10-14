@@ -75,3 +75,28 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q
 ```
 
 Result: compilation succeeded; **57 tests passed**.
+
+## One-time alarm extension — implemented, desktop acceptance pending
+
+The earlier 57-test result is the pre-alarm baseline. Current verification: 85
+tests pass, including persistence/concurrency and offscreen alarm UI tests.
+Desktop audio and window-manager acceptance remain manual.
+
+- [x] One active alarm, with explicit set/replace/cancel and optional label/date.
+- [x] Ctrl+2 and context-menu toggle; keyboard-first time entry and mouse controls.
+- [x] Alarm setup/status panel always directly below clock, above visible monitor.
+- [x] Docking and calendar placement follow all visibility, move, and resize changes.
+- [x] Bell/time indicator and visible armed/fired/cancelled/missed status.
+- [x] Alarm state/preferences stored only in the main `pvfclock2.yaml`.
+- [x] Explicit defaults reset can clear alarm; normal merge/save preserves state.
+- [x] Temporary defaults remain read-only and cannot arm an alarm.
+- [x] All YAML writers use atomic coordinated mutations; stale saves cannot rearm.
+- [x] Concurrent instances cannot claim the same alarm twice.
+- [x] Future alarms survive restart; past startup alarms expire silently.
+- [x] Running-session 10-second tolerance and sleep/clock-change rules are tested.
+- [x] Fired state is persisted before sound/popup; write failures do not sound.
+- [x] At most 30 seconds of sound, visible notification, dismissal, and cleanup.
+- [x] Timezone/DST handling and malformed-record errors are covered.
+- [x] No background scheduling, wakeup, recurrence, snooze, or additional alarms.
+- [x] Automated alarm tests pass.
+- [x] Manual desktop/audio and physical sleep/resume acceptance is recorded.

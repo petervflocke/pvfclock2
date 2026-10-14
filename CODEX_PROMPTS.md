@@ -49,3 +49,28 @@ python -m pytest
 ```
 
 Report changed files, test results, manual checks, and known limitations.
+
+## One-time alarm implementation prompt (implemented design reference)
+
+Implement the alarm extension sequence in `CODEX_IMPLEMENTATION_PLAN.md`, following
+`CODEX_FEATURE_SPEC.md` and its engineering extension. One active alarm only;
+missed alarms expire silently. Ctrl+2 toggles an editor/status panel directly below
+the clock and ABOVE any visible monitor; update monitor/calendar positions on all
+stack changes. Provide keyboard-first time entry, optional mouse controls/date
+picker, label, explicit set/replace/cancel, and a clock indicator.
+
+Store all alarm preferences/state in `~/.config/pvfclock2.yaml`. Defaults may clear
+to an empty alarm on explicit reset. Normal merges/saves must preserve persisted
+state. Temporary defaults remain read-only; no separate alarm config file. Apply
+atomic coordinated read/modify/write to all YAML writers, so concurrent instances
+and stale snapshots cannot duplicate or resurrect an alarm. Persist a fired claim
+before notifying; failures must not sound an unrecorded alarm. Startup past alarms
+are missed; running-session lateness tolerance is 10 seconds.
+
+Add independent nonblocking alarm checks, notification, at most 30 seconds of
+sound, and dismissal. No background scheduling, wake timer, snooze, recurrence, or
+multiple alarms. Add the tests/manual checks specified in `CODEX_TEST_PLAN.md`.
+Preserve existing monitoring, configuration recovery, and quit behavior. Never
+access the productive legacy config. Run compileall and headless pytest; report
+results and remaining manual audio/desktop checks. Do not mark planned checklist
+items complete without evidence.

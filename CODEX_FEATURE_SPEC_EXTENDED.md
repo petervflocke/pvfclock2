@@ -173,3 +173,54 @@ Responsibilities:
 - `python -m compileall .` succeeds.
 - `python -m pytest` succeeds, or missing test tooling is documented.
 - Final response includes changed files, tests run, and any known limitations.
+
+## Alarm extension contracts
+
+The approved alarm extension in `CODEX_FEATURE_SPEC.md` is the source of truth.
+Alarm state belongs in the main YAML, not a separate persistence file.
+
+Suggested focused modules:
+
+- `alarm_model.py`: typed dataclass/enum for a single alarm record; pure validation,
+  timezone conversion, due/missed decisions, and explicit state transitions.
+- `alarm_controller.py`: lightweight independent Qt timer, startup reconciliation,
+  set/cancel/claim orchestration, and signals for status/notification. Inject time
+  and persistence for deterministic tests; do not tie alarm checks to sensor polls.
+- `alarm_panel.py`: keyboard-first editor and status UI; no persistence or due-time
+  decisions in widget code.
+- `alarm_notification.py`: notification, bounded nonblocking audio, dismissal, and
+  cleanup. Select and validate a Qt-compatible audio backend/bundled asset during
+  implementation; document any dependency and license. Audio failure must retain
+  the visible notification without rearming the alarm.
+- `AppConfig`: shared atomic, coordinated YAML mutations for ALL writers, including
+  geometry/default merges. Read fresh state under a runtime lock, validate the
+  expected alarm ID/state, write a sibling temporary file, flush/fsync and replace
+  atomically before acknowledging a fired claim. Release locks and clean temporary
+  files on failures. Do not use a lock on a YAML inode replaced during the write.
+- `MainWindow`: Ctrl+2/menu action, bell/status indicator, stack docking, and calendar
+  anchoring. Keep the clock itself at its existing geometry.
+
+Do not hold a lock or perform potentially lengthy persistence work on the GUI
+thread. Serialize mutations and return completion signals before activating audio.
+An alarm claim succeeds only if the persisted record still has the expected ID and
+`armed` state. Reread state before writes so multiple instances and stale snapshots
+cannot duplicate or resurrect an alarm. Reconcile external transitions for status.
+
+At startup any past armed alarm becomes missed, without a grace-period ring.
+While running, apply the 10-second tolerance; startup and running evaluation are
+separate testable paths. No alarm timer or state reload may replay terminal states.
+Only explicit set/replacement creates a fresh ID. Defaults/reset may clear to null;
+normal merges and preference saves must preserve current persisted state.
+
+Keep temporary-default mode read-only and empty of alarms. Explain disabled arming
+in the UI until configuration is writable. Report malformed alarm data without
+silently rewriting it. Full unrelated preference validation remains separate.
+
+The extension is not complete until model, persistence, concurrency, UI stacking,
+restart/missed-alarm, and notification cleanup tests pass. Desktop audio and
+window-manager behavior require manual acceptance as well.
+
+Implementation note: `alarm_store.py` owns record transactions; `config_storage.py`
+provides shared runtime locking and atomic YAML writes. Geometry saves and config
+reloads use the alarm storage worker. The included synthesized WAV uses
+QtMultimedia QSoundEffect, with a visible fallback when audio is unavailable.

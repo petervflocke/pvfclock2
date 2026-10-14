@@ -509,3 +509,115 @@ Keep PyQt5 pinned as currently configured unless dependency resolution requires 
 - History uses configured interval and duration.
 - Missing sensors or missing commands do not crash the app.
 
+
+## Approved extension: one-time alarm (implemented; desktop acceptance pending)
+
+This extension adds one active alarm and takes precedence over earlier docking
+rules where they differ. It does not authorize background scheduling, autostart,
+recurrence, or additional configuration files.
+
+### User interaction
+
+- `Ctrl+2` and a `Toggle Alarm` context-menu action toggle a separate frameless,
+  always-on-top alarm setup/status panel. `Ctrl+1` remains the monitor toggle;
+  `Ctrl+Q` remains quit.
+- Opening the panel focuses the time editor. Accept `14:30` and `1430`; Left/Right
+  selects hour/minute segments, Up/Down changes them, and Tab moves between fields.
+- Mouse input supports segment selection, increment/decrement arrows, and wheel
+  changes over the selected time segment. Provide a date picker and optional label.
+- Enter explicitly sets/replaces the alarm. Escape hides the editor without
+  applying pending edits. Hiding the panel never cancels an armed alarm.
+- A time already passed today suggests tomorrow. Show the full resolved date/time
+  and time remaining before confirmation. Explicit past dates cannot be armed.
+- Show the active alarm, last outcome, and a Cancel Alarm control. An edit takes
+  effect only after Set Alarm; at most one alarm can be armed.
+- Show a small bell and scheduled time on the main clock while armed.
+
+### Panel order and calendar placement
+
+All panels remain separate windows; do not resize the clock to contain them.
+The vertical order is always clock, alarm panel (if visible), monitor (if visible).
+The alarm panel opens directly below the clock, even when the monitor is already
+open. Move the monitor below it immediately. Hiding the alarm moves the monitor
+back directly below the clock. Visibility does not change alarm scheduling.
+
+Align panel X coordinates to the clock. The alarm panel follows clock width;
+retain the monitor's clock/fixed width setting. Recompute docking after toggles,
+clock movement/resizing, and panel height changes. The calendar opens below the
+lowest visible component (monitor, otherwise alarm, otherwise clock), retaining
+the existing calendar gap. Reposition an already-visible calendar when the stack
+changes as well. Keyboard focus and shortcuts must work across both panels.
+
+### One-time and missed-alarm semantics
+
+- Alarms activate only while the clock application is running. No OS scheduler,
+  daemon, wake timer, background service, or wake-from-sleep behavior.
+- Persist an absolute timezone-aware scheduled instant, plus the timezone used at
+  entry for display. A timezone change keeps the original instant. Reject
+  nonexistent daylight-saving times; clarify ambiguous times before arming.
+- A future armed alarm survives normal exit/restart. If its due time has already
+  passed at startup, mark it missed silently: no sound or popup, only status.
+- During a running session, allow up to 10 seconds of lateness for normal timer
+  delays. Beyond that, including a long suspension or forward clock jump, mark it
+  missed silently. A short suspension within that tolerance can still ring.
+- A backward clock change cannot reactivate a consumed alarm.
+- States are `armed`, `fired`, `cancelled`, and `missed`; no alarm is represented by
+  `current: null`. Only `armed` is eligible. Preserve the latest outcome for status
+  until the user replaces or clears it.
+- One activation may play sound repeatedly for at most 30 seconds or until
+  dismissed. Show a visible notification with label/time and flash the clock's
+  alarm indicator. Enter/Escape dismiss only when the notification has focus.
+- Persist `fired` before notification or audio. Restarting after firing never
+  repeats it, even if the notification was not dismissed. If persistence fails,
+  report the error and do not sound. A crash after persistence but before sound
+  can lose the notification: at-most-once activation is preferred to duplicates.
+- Guard the transition against concurrent application instances. Only one may
+  claim an armed alarm; stale configuration saves must never rearm it.
+
+### Configuration and persistence
+
+Use ONLY `~/.config/pvfclock2.yaml` for alarm preferences and state. Do not add an
+alarm JSON/YAML file. An explicit reset to defaults may clear the alarm; preserving
+an alarm across a user-requested reset is not required. Default merging must still
+preserve an existing alarm. Temporary in-memory defaults start with no alarm and
+retain their existing write protection: arming is unavailable until a valid config
+is loaded or the user explicitly saves a default configuration. Do not silently
+replace invalid YAML or remove the existing startup recovery dialog.
+
+Proposed defaults:
+
+```yaml
+alarm:
+  shortcut: "Ctrl+2"
+  lateness_tolerance_seconds: 10
+  sound:
+    enabled: true
+    duration_seconds: 30
+  current: null
+```
+
+An active/current record contains `id` (unique per explicit set/replacement),
+`scheduled_at` (UTC ISO-8601), `timezone` (entry timezone identifier), `label`,
+`state`, and `state_changed_at` (UTC ISO-8601). A missing alarm section merges to
+these defaults. An invalid alarm record must be reported and kept inactive; never
+infer an armed alarm from malformed data.
+
+All YAML writes, including geometry and default merging, must preserve the latest
+alarm state through a shared atomic read/modify/write mechanism and interprocess
+coordination. A transient lock in a runtime directory is permitted; it stores no
+configuration or alarm data. Reload observes persisted transitions instead of
+resurrecting stale in-memory records. State changes must not overwrite unrelated
+user settings. Explicit default reset is the exception and clears the alarm.
+
+### Scope and acceptance
+
+First version: one alarm, keyboard/mouse time input, date, optional label,
+set/replace/cancel, persistence, missed status, bounded sound, notification,
+dismissal, and clock indicator. Snooze, recurrence, multiple alarms, presets,
+custom sounds, background scheduling, and wakeup are future ideas, not current
+requirements. If later added, snooze creates a new explicit one-time alarm.
+
+Acceptance requires restart-safe at-most-once activation, silent missed alarms,
+correct docking for all four alarm/monitor visibility combinations, responsive
+clock behavior, keyboard completion without a mouse, and preservation of existing
+monitor, calendar, YAML recovery, and quit behavior.

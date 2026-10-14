@@ -88,15 +88,23 @@ def test_reload_preserves_fallback_on_error_and_restores_saving(qtbot, tmp_path,
         assert "Saving disabled" in window.statusBar().currentMessage()
         assert path.read_text() == "broken: ["
         window.reload_config()
+        qtbot.waitUntil(lambda: bool(errors))
         assert isinstance(errors[0], ConfigLoadError)
         assert window.app_config is config
         path.write_text("metrics:\n  temperatures:\n    enabled: false\n")
         window.reload_config()
+        qtbot.waitUntil(lambda: not window.app_config.temporary)
         assert not window.app_config.temporary
         window.move(123, 45)
         window.mouseDoubleClickEvent(None)
+        qtbot.waitUntil(lambda: window.statusBar().currentMessage() == "Geometry saved")
+        window.alarm_controller.timer.stop()
+        qtbot.waitUntil(lambda: not window.alarm_controller.busy)
         assert AppConfig.load(path).get("clock.geometry.x") == 123
     finally:
+        window.alarm_controller.shutdown_finished.disconnect(window.finish_shutdown)
+        window.alarm_controller.stop()
+        qtbot.waitUntil(lambda: not window.alarm_controller.thread.isRunning())
         window.monitor_controller.stop()
         qtbot.waitUntil(lambda: not window.monitor_controller.thread.isRunning())
         window._shutdown_complete = True

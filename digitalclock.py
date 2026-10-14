@@ -3,12 +3,15 @@ import sys
 from mycalendar import CalendarApp
 from PyQt5.QtWidgets import QApplication, QMainWindow, QLCDNumber, QLabel, QVBoxLayout, QWidget, QSizeGrip, QStatusBar, QAction
 from PyQt5.QtGui import QIcon, QPalette, QColor
-from PyQt5.QtCore import QTime, QTimer, Qt
+from PyQt5.QtCore import QTime, QTimer, Qt, QEvent
 from datetime import date
 
 from app_config import AppConfig, DEFAULT_CONFIG
 from monitor_controller import MonitorController
 from monitor_panel import MonitorPanel
+from alarm_controller import AlarmController
+from alarm_panel import AlarmPanel
+from alarm_notification import AlarmNotification
 from config_dialogs import load_startup_config, show_reload_error
 
 
@@ -62,6 +65,20 @@ class MainWindow(QMainWindow):
         self.app_config = app_config
         self.monitor_panel = MonitorPanel(app_config)
         self.monitor_controller = MonitorController(app_config, self.monitor_panel)
+        self.alarm_panel = AlarmPanel(app_config)
+        self._docking = False
+        self.monitor_panel.installEventFilter(self)
+        self.alarm_panel.installEventFilter(self)
+        self.alarm_controller = AlarmController(app_config, self)
+        self.alarm_panel.armed.connect(self.alarm_controller.arm)
+        self.alarm_panel.cancelled.connect(self.alarm_controller.cancel)
+        self.alarm_panel.hidden.connect(self.dock_monitor_panel)
+        self.alarm_controller.changed.connect(self.update_alarm)
+        self.alarm_controller.error.connect(self.alarm_error)
+        self.alarm_controller.ringing.connect(self.ring_alarm)
+        self.alarm_controller.configuration_ready.connect(self.configuration_ready)
+        self.alarm_controller.shutdown_finished.connect(self.finish_shutdown)
+        self.notification = None
         self._shutdown_started = False
         self._shutdown_complete = False
         self.monitor_controller.shutdown_finished.connect(self.finish_shutdown)
@@ -71,6 +88,8 @@ class MainWindow(QMainWindow):
         
         status_bar = CustomStatusBar(self)
         self.setStatusBar(status_bar)
+        self.alarm_indicator = QLabel()
+        status_bar.addPermanentWidget(self.alarm_indicator)
         status_bar.setStyleSheet(f"color: {params['lcd_face']}; background: {params['lcd_back']};")
         status_bar.setStyleSheet(f"color: {params['lcd_face']}; background: {params['clock_back']};")
         status_bar.mouseDoubleClickEvent = self.show_calendar
@@ -126,6 +145,11 @@ class MainWindow(QMainWindow):
                 triggered=self.toggle_monitor)
         self.toggleMonitorAction.setShortcutContext(Qt.ApplicationShortcut)
         self.addAction(self.toggleMonitorAction)
+        self.toggleAlarmAction = QAction("Toggle Alarm", self,
+                shortcut=str(app_config.get("alarm.shortcut", "Ctrl+2")),
+                triggered=self.toggle_alarm)
+        self.toggleAlarmAction.setShortcutContext(Qt.ApplicationShortcut)
+        self.addAction(self.toggleAlarmAction)
         self.reloadConfigAction = QAction(
                 "Reload Config", self,
                 shortcut=str(self.app_config.get("app.reload_shortcut", "Ctrl+R")),
@@ -160,7 +184,7 @@ class MainWindow(QMainWindow):
             print(message, file=sys.stderr)
             self.statusBar().showMessage(message, 5000)
             return
-        self.app_config.update_clock_params({
+        self.alarm_controller.submit('geometry', {
             'x': self.pos().x(),
             'y': self.pos().y(),
             'w': self.width(),
@@ -173,27 +197,38 @@ class MainWindow(QMainWindow):
 
     def show_calendar(self, event=None):
         self.calendar_app = CalendarApp()
-        anchor = self.monitor_panel if self.monitor_panel.isVisible() else self
-        x, y = self.pos().x(), anchor.pos().y() + anchor.size().height() + 40
-        self.calendar_app.move(x, y)
+        self.position_calendar()
 
     def toggle_monitor(self):
         if self.monitor_panel.isVisible():
             self.monitor_panel.hide()
+            self.dock_monitor_panel()
             return
         self.dock_monitor_panel()
         self.monitor_panel.show()
+        self.dock_monitor_panel()
         self.monitor_controller.poll()
 
     def reload_config(self):
+        self.alarm_controller.submit('reload')
+
+    def configuration_ready(self, new_config, action, error):
         global params
+        if error:
+            if action == 'reload':
+                show_reload_error(self, error)
+            else:
+                print(f"Geometry save failed: {error}", file=sys.stderr)
+                self.statusBar().showMessage(f"Geometry save failed: {error}", 5000)
+            return
+        if action == 'geometry':
+            self.statusBar().showMessage('Geometry saved', 3000)
+            return
         was_panel_visible = self.monitor_panel.isVisible()
         try:
-            new_config = AppConfig.load(self.app_config.path)
             new_params = new_config.clock_params()
         except Exception as error:
             show_reload_error(self, error)
-            self.statusBar().showMessage(f"Config reload failed: {error}", 5000)
             return
         self.app_config = new_config
         params = new_params
@@ -202,6 +237,9 @@ class MainWindow(QMainWindow):
         self.apply_clock_style()
         self.monitor_panel.apply_config(self.app_config)
         self.monitor_controller.configure(self.app_config)
+        self.alarm_controller.configure(self.app_config)
+        self.alarm_panel.configure(self.app_config)
+        self.toggleAlarmAction.setShortcut(str(self.app_config.get("alarm.shortcut", "Ctrl+2")))
         self.dock_monitor_panel()
         if was_panel_visible:
             self.monitor_panel.show()
@@ -209,8 +247,69 @@ class MainWindow(QMainWindow):
             self.dock_monitor_panel()
         self.statusBar().showMessage("Config reloaded", 3000)
 
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Resize and hasattr(self, 'lcd_container'):
+            if watched in (self.monitor_panel, self.alarm_panel) and not self._docking:
+                QTimer.singleShot(0, self.dock_monitor_panel)
+        return super().eventFilter(watched, event)
+
     def dock_monitor_panel(self):
+        if getattr(self, '_docking', False):
+            return
+        self._docking = True
         self.monitor_panel.dock_to_clock(self)
+        if hasattr(self, 'alarm_panel') and self.alarm_panel.isVisible():
+            self.alarm_panel.resize(self.width(), self.alarm_panel.sizeHint().height())
+            self.alarm_panel.move(self.x(), self.y() + self.height())
+            self.monitor_panel.move(self.x(), self.alarm_panel.y() + self.alarm_panel.height())
+        self.position_calendar()
+        self._docking = False
+
+    def position_calendar(self):
+        if not hasattr(self, 'calendar_app') or not self.calendar_app.isVisible():
+            return
+        anchor = self
+        if hasattr(self, 'alarm_panel') and self.alarm_panel.isVisible():
+            anchor = self.alarm_panel
+        if self.monitor_panel.isVisible():
+            anchor = self.monitor_panel
+        self.calendar_app.move(self.x(), anchor.y() + anchor.height() + 40)
+
+    def toggle_alarm(self):
+        if self.alarm_panel.isVisible():
+            self.alarm_panel.hide()
+        else:
+            self.alarm_panel.open_editor(self.alarm_controller.current)
+        self.dock_monitor_panel()
+
+    def update_alarm(self, alarm):
+        self.alarm_panel.show_alarm(alarm)
+        if self.app_config.temporary:
+            self.alarm_panel.configure(self.app_config)
+        if self.notification is None or not self.notification.flash_timer.isActive():
+            self.alarm_indicator.setText(
+                f"🔔 {alarm.due.astimezone():%H:%M}" if alarm and alarm.state == 'armed' else '')
+        self.dock_monitor_panel()
+
+    def alarm_error(self, message):
+        self.alarm_panel.status.setText(f"Alarm error: {message}")
+        self.alarm_indicator.setText('Alarm !')
+        self.alarm_indicator.setToolTip(message)
+
+    def ring_alarm(self, alarm, settings):
+        if self._shutdown_started:
+            return
+        if self.notification:
+            self.notification.close()
+        self.notification = AlarmNotification(
+            alarm, settings, self,
+            text_color=str(self.app_config.get('clock.colors.lcd_face', '#7fff00')),
+        )
+        self.notification.flashing.connect(
+            lambda active: self.alarm_indicator.setText('ALARM' if active else ''))
+        self.notification.show()
+        self.notification.raise_()
+        self.notification.activateWindow()
 
     def mouseMoveEvent(self, event):
         newPos = event.globalPos() - self.offset
@@ -234,8 +333,14 @@ class MainWindow(QMainWindow):
             self.setEnabled(False)
             self.monitor_panel.hide()
             self.monitor_controller.stop()
+            self.alarm_panel.hide()
+            if self.notification:
+                self.notification.close()
+            self.alarm_controller.stop()
 
     def finish_shutdown(self):
+        if self.monitor_controller.thread.isRunning() or self.alarm_controller.thread.isRunning():
+            return
         self._shutdown_complete = True
         self.monitor_panel.close()
         self.close()
@@ -243,13 +348,13 @@ class MainWindow(QMainWindow):
 
     def moveEvent(self, event):
         super().moveEvent(event)
-        if hasattr(self, "monitor_panel") and self.monitor_panel.isVisible():
+        if hasattr(self, "monitor_panel"):
             self.dock_monitor_panel()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.update_lcd_geometry()
-        if hasattr(self, "monitor_panel") and self.monitor_panel.isVisible():
+        if hasattr(self, "monitor_panel"):
             self.dock_monitor_panel()
 
     def update_lcd_geometry(self):

@@ -87,3 +87,47 @@ python -m pytest
 ```bash
 python -m compileall .
 ```
+
+## One-time alarm extension tests
+
+### Model and persistence
+
+- Defaults contain `alarm.current: null`; normal merges preserve an armed record.
+- Explicit default reset may clear an alarm; temporary defaults neither arm nor save.
+- Parse `1430` and `14:30`; resolve tomorrow visibly, reject explicit past dates,
+  nonexistent DST times, and unresolved ambiguous DST times.
+- Future armed alarms survive restart. Any past alarm at startup becomes missed
+  silently, even within the running-session tolerance.
+- Running alarms fire once within 10 seconds of due time; later ticks, long sleep,
+  or forward clock jumps mark them missed without notification. Backward jumps,
+  repeated ticks, reload, and restart never replay fired/cancelled/missed records.
+- Persist fired before sound/popup. Failed writes produce an error and no sound;
+  a simulated crash after commit does not replay on restart.
+- Two competing instances claim at most one activation. A stale geometry/config
+  save cannot rearm or replace a terminal/newer record. Unrelated edits survive.
+- Replace/cancel racing a claim resolves by persisted ID/state, not stale snapshots.
+- Invalid records remain inactive and produce a clear error. Atomic-write and lock
+  failures preserve valid existing YAML; runtime lock stores no alarm/config data.
+
+### Qt and manual acceptance
+
+- Ctrl+2/menu toggles the alarm panel and focuses time input. Enter confirms;
+  Escape hides without applying edits; hiding never cancels an armed alarm.
+- Keyboard segments, arrows, Tab, typed formats, date, label, and cancellation work;
+  mouse arrows/wheel/date picker work without accidental confirmation.
+- Test all four alarm/monitor visibility combinations, both toggle orders, movement,
+  resizing, height changes, and monitor fixed width. Alarm always sits immediately
+  below the clock; monitor sits below alarm when both are visible.
+- Calendar opens and repositions below the lowest visible component.
+- Notification shows label/time, flashes the indicator, sounds for at most 30
+  seconds, and dismisses with Enter/Escape when focused. Test sound-disabled and
+  audio-unavailable behavior. Dismissal/shutdown stop audio and never rearm.
+- Slow sensor work or persistence must not freeze alarm editing/clock updates.
+- Exit before a future alarm, restart before it, and verify one activation. Repeat
+  with restart after due time and verify silent missed status. Suspend/resume too.
+- Confirm no extra alarm configuration file, OS scheduling, wakeup, or background
+  process is created. Use temporary YAML paths for automated tests.
+
+Automated coverage is in `tests/test_alarm.py` and `tests/test_alarm_gui.py`.
+Desktop audio, physical sleep/resume, and window-manager behavior remain manual.
+The complete suite now contains 85 passing tests, including the original 57.

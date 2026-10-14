@@ -6,10 +6,14 @@ from typing import Any
 
 import yaml
 
+from config_storage import config_lock, atomic_write, apply_changes
+
 
 CONFIG_PATH = Path.home() / ".config" / "pvfclock2.yaml"
 
 DEFAULT_CONFIG: dict[str, Any] = {
+    "alarm": {"shortcut": "Ctrl+2", "lateness_tolerance_seconds": 10,
+              "sound": {"enabled": True, "duration_seconds": 30}, "current": None},
     "app": {
         "config_version": 1,
         "reload_shortcut": "Ctrl+R",
@@ -185,6 +189,7 @@ class AppConfig:
         self.path = path
         self._data = data
         self.temporary = temporary
+        self._original = deepcopy(data)
 
     @classmethod
     def temporary_defaults(cls, path: Path) -> "AppConfig":
@@ -193,6 +198,11 @@ class AppConfig:
     @classmethod
     def load(cls, path: Path | None = None) -> "AppConfig":
         config_path = path or CONFIG_PATH
+        with config_lock(config_path):
+            return cls._load_unlocked(config_path)
+
+    @classmethod
+    def _load_unlocked(cls, config_path: Path) -> "AppConfig":
         loaded: dict[str, Any] = {}
         missing_config = not config_path.exists()
 
@@ -221,7 +231,7 @@ class AppConfig:
         changed = _merge_network_feature_defaults(data, loaded) or changed
         config = cls(config_path, data)
         if missing_config or changed:
-            config.save()
+            atomic_write(config_path, data)
         return config
 
     @property
@@ -238,9 +248,15 @@ class AppConfig:
 
     def save(self) -> None:
         self._require_writable()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("w", encoding="utf-8") as config_file:
-            yaml.safe_dump(self._data, config_file, sort_keys=False)
+        with config_lock(self.path):
+            fresh = self._load_unlocked(self.path)
+            current_alarm = deepcopy(fresh.get("alarm.current"))
+            apply_changes(fresh.data, self._original, self._data)
+            # Only AlarmStore transitions may change the persisted alarm record.
+            fresh.data.setdefault("alarm", {})["current"] = current_alarm
+            atomic_write(self.path, fresh.data)
+            self._data = fresh.data
+            self._original = deepcopy(self._data)
 
     def clock_params(self) -> dict[str, Any]:
         geometry = self.get("clock.geometry", {})

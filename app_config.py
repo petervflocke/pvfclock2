@@ -163,10 +163,32 @@ def _deep_merge(defaults: dict[str, Any], loaded: dict[str, Any]) -> tuple[dict[
     return merged, changed
 
 
+class ConfigLoadError(ValueError):
+    """A configuration error suitable for display without a traceback."""
+
+    def __init__(self, path: Path, problem: str, line: int | None = None,
+                 column: int | None = None, source_line: str | None = None):
+        self.path = path
+        self.line = line
+        self.column = column
+        message = f"Cannot read {path}"
+        if line is not None:
+            message += f"\nLine {line}, column {column}"
+        message += f": {problem}"
+        if source_line is not None:
+            message += f"\n{source_line}\n{' ' * ((column or 1) - 1)}^"
+        super().__init__(message)
+
+
 class AppConfig:
-    def __init__(self, path: Path, data: dict[str, Any]):
+    def __init__(self, path: Path, data: dict[str, Any], *, temporary: bool = False):
         self.path = path
         self._data = data
+        self.temporary = temporary
+
+    @classmethod
+    def temporary_defaults(cls, path: Path) -> "AppConfig":
+        return cls(path, deepcopy(DEFAULT_CONFIG), temporary=True)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AppConfig":
@@ -175,10 +197,23 @@ class AppConfig:
         missing_config = not config_path.exists()
 
         if not missing_config:
-            with config_path.open("r", encoding="utf-8") as config_file:
-                raw = yaml.safe_load(config_file) or {}
-            if isinstance(raw, dict):
-                loaded = raw
+            source = config_path.read_text(encoding="utf-8")
+            try:
+                raw = yaml.safe_load(source)
+            except yaml.YAMLError as error:
+                mark = getattr(error, "problem_mark", None)
+                lines = source.splitlines()
+                raise ConfigLoadError(
+                    config_path, getattr(error, "problem", None) or str(error),
+                    mark.line + 1 if mark else None,
+                    mark.column + 1 if mark else None,
+                    lines[mark.line] if mark and mark.line < len(lines) else None,
+                ) from error
+            if raw is None and not source.strip():
+                raw = {}
+            if not isinstance(raw, dict):
+                raise ConfigLoadError(config_path, "Expected a YAML mapping of configuration keys.")
+            loaded = raw
 
         data, changed = _deep_merge(DEFAULT_CONFIG, loaded)
         changed = _merge_metric_display_defaults(data, loaded) or changed
@@ -202,6 +237,7 @@ class AppConfig:
         return current
 
     def save(self) -> None:
+        self._require_writable()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("w", encoding="utf-8") as config_file:
             yaml.safe_dump(self._data, config_file, sort_keys=False)
@@ -223,6 +259,7 @@ class AppConfig:
         }
 
     def update_clock_params(self, params: dict[str, Any]) -> None:
+        self._require_writable()
         self._data["clock"]["geometry"].update(
             {
                 "x": int(params["x"]),
@@ -240,6 +277,13 @@ class AppConfig:
         )
         self._data["clock"]["icon"] = str(params["icon"])
         self.save()
+
+    def _require_writable(self) -> None:
+        if self.temporary:
+            raise PermissionError(
+                "Saving is disabled while running with temporary defaults. "
+                "Fix the YAML file and use Reload Config (Ctrl+R) first."
+            )
 
     @staticmethod
     def _dict_get(value: object, key: str, default: object) -> object:

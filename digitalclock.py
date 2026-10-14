@@ -9,6 +9,7 @@ from datetime import date
 from app_config import AppConfig, DEFAULT_CONFIG
 from monitor_controller import MonitorController
 from monitor_panel import MonitorPanel
+from config_dialogs import load_startup_config, show_reload_error
 
 
 lcd_margin = 1  # Define the LCD container margin
@@ -154,6 +155,11 @@ class MainWindow(QMainWindow):
         self.monitor_controller.start()
 
     def mouseDoubleClickEvent(self, event):
+        if self.app_config.temporary:
+            message = "Saving disabled: fix the YAML file and use Reload Config (Ctrl+R) first."
+            print(message, file=sys.stderr)
+            self.statusBar().showMessage(message, 5000)
+            return
         self.app_config.update_clock_params({
             'x': self.pos().x(),
             'y': self.pos().y(),
@@ -183,12 +189,14 @@ class MainWindow(QMainWindow):
         global params
         was_panel_visible = self.monitor_panel.isVisible()
         try:
-            self.app_config = AppConfig.load(self.app_config.path)
+            new_config = AppConfig.load(self.app_config.path)
+            new_params = new_config.clock_params()
         except Exception as error:
-            print(f"Error reloading config: {error}")
+            show_reload_error(self, error)
             self.statusBar().showMessage(f"Config reload failed: {error}", 5000)
             return
-        params = self.app_config.clock_params()
+        self.app_config = new_config
+        params = new_params
         self.toggleMonitorAction.setShortcut(str(self.app_config.get("monitor_panel.shortcut", "Ctrl+1")))
         self.reloadConfigAction.setShortcut(str(self.app_config.get("app.reload_shortcut", "Ctrl+R")))
         self.apply_clock_style()
@@ -273,7 +281,9 @@ class MainWindow(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app_config = AppConfig.load()
+    app_config = load_startup_config()
+    if app_config is None:
+        sys.exit(1)
     params = app_config.clock_params()
     window = MainWindow(app_config)
     sys.exit(app.exec_())

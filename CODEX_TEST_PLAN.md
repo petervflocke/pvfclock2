@@ -11,6 +11,10 @@ Create tests under `tests/` for pure Python logic.
 - `test_existing_user_values_are_preserved_on_merge`
 - `test_legacy_config_path_is_never_used`
 
+Configuration recovery tests in `tests/test_config_recovery.py` cover parser line/column
+and source text, invalid top-level documents, both startup dialog choices, blocked
+saving with temporary defaults, and recovery through Reload Config.
+
 ### Sensor parser tests
 
 - `test_parse_k10temp_tctl_temperature`
@@ -35,6 +39,11 @@ Create tests under `tests/` for pure Python logic.
 - `test_history_buffer_drops_oldest_values`
 
 ## Manual GUI tests
+
+- Introduce a YAML syntax error in `pvfclock2.yaml`; confirm the startup dialog and stderr identify the file, line, and column.
+- Choose Exit and confirm the YAML is unchanged; restart and choose Run with defaults.
+- Double-click the clock in temporary-defaults mode; confirm saving is disabled and the YAML is unchanged.
+- Fix the YAML and press `Ctrl+R`; confirm normal configuration and geometry saving are restored.
 
 - Start app with no `~/.config/pvfclock2.yaml`.
 - Confirm default YAML is created.

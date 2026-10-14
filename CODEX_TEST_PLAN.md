@@ -49,6 +49,23 @@ Create tests under `tests/` for pure Python logic.
 - Disable a metric in YAML, restart, confirm it is hidden.
 - Rename a metric label in YAML, restart, confirm new label appears.
 - Temporarily make `sensors` unavailable, confirm app still starts.
+- Configure a slow sensor command and confirm the clock, dragging, and monitor toggle remain responsive.
+- Quit during slow collection using both `Ctrl+Q` and window close; confirm the app exits after collection finishes without thread warnings.
+
+## Asynchronous polling tests
+
+`tests/test_async_monitor.py` verifies:
+
+- A GUI heartbeat continues while collection is blocked in the worker thread.
+- Widget updates run on the GUI thread, and collections never overlap.
+- Timer ticks skip busy collection; explicit refresh requests coalesce.
+- Collection and display exceptions are logged and later polls recover.
+- Reloaded config is isolated from active work, stale results are discarded, and external-IP refresh intent survives.
+- History collection respects hidden-panel settings.
+- Shutdown discards late results and pending work, including real window-close and `Ctrl+Q` paths.
+
+For headless validation, run `QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest`.
+Slow collection delays fresh monitor values; shutdown waits asynchronously for active collection to finish.
 
 ## Test command
 

@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from collections import deque
+from copy import deepcopy
 from dataclasses import dataclass, field
+import logging
 from typing import Any
 
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal, pyqtSlot
 
 from metrics_provider import MetricValue, SystemMetricsProvider
+from monitor_worker import MonitorWorker
+
+
+logger = logging.getLogger(__name__)
 
 
 def history_capacity(update_interval_seconds: float, history_minutes: float) -> int:
@@ -31,21 +37,39 @@ class HistoryBuffer:
         return list(self.values)
 
 
-class MonitorController:
+class MonitorController(QObject):
+    collection_requested = pyqtSignal(int, object, bool)
+    shutdown_finished = pyqtSignal()
+
     def __init__(
         self,
         app_config: Any,
         panel: Any,
         provider: SystemMetricsProvider | None = None,
     ):
+        super().__init__()
         self.app_config = app_config
         self.panel = panel
-        self.provider = provider or SystemMetricsProvider(config=app_config.data)
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.poll)
+        self._busy = False
+        self._closing = False
+        self._pending_refresh = False
+        self._pending_poll = False
+        self._generation = 0
+        self.thread = QThread(self)
+        self.worker = MonitorWorker(provider)
+        self.worker.moveToThread(self.thread)
+        self.collection_requested.connect(self.worker.collect, Qt.QueuedConnection)
+        self.worker.completed.connect(self._collection_completed, Qt.QueuedConnection)
+        self.thread.finished.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self.shutdown_finished)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._timer_poll)
         self.configure(app_config)
+        self.thread.start()
 
     def configure(self, app_config: Any) -> None:
+        if self._closing:
+            return
         was_active = getattr(self, "timer", None) is not None and self.timer.isActive()
         if was_active:
             self.timer.stop()
@@ -60,31 +84,82 @@ class MonitorController:
         else:
             self._resize_history_buffers()
         self.app_config = app_config
-        self.provider.config = app_config.data
+        self._config_snapshot = deepcopy(app_config.data)
+        self._generation += 1
+        if self._busy:
+            self._pending_poll = True
         self.timer.setInterval(max(1, int(self.update_interval_seconds * 1000)))
         if was_active:
             self.timer.start()
 
     def start(self) -> None:
+        if self._closing:
+            return
         self.poll()
         self.timer.start()
 
     def stop(self) -> None:
+        """Permanently stop; emit shutdown_finished after active work exits."""
+        if self._closing:
+            return
+        self._closing = True
         self.timer.stop()
+        self._pending_poll = False
+        self._pending_refresh = False
+        if not self._busy:
+            self.thread.quit()
 
     def poll(self) -> None:
+        """Request an immediate refresh, coalescing requests during active work."""
+        self._request_poll(explicit=True)
+
+    @pyqtSlot()
+    def _timer_poll(self) -> None:
+        self._request_poll(explicit=False)
+
+    def _request_poll(self, explicit: bool) -> None:
+        if self._closing:
+            return
         if self.collect_history_mode == "panel_visible" and not self.panel.isVisible():
             return
+        if self._busy:
+            self._pending_poll = self._pending_poll or explicit
+            return
+        self._busy = True
+        refresh = self._pending_refresh
+        self._pending_refresh = False
+        self._pending_poll = False
+        self.collection_requested.emit(self._generation, deepcopy(self._config_snapshot), refresh)
 
-        metrics = self.provider.collect()
-        for metric in metrics:
-            self._history_for(metric.key).append(metric.value)
-
-        history = {key: buffer.as_list() for key, buffer in self.history.items()}
-        self.panel.set_metrics(metrics, history)
+    @pyqtSlot(int, object)
+    def _collection_completed(self, generation: int, metrics: list[MetricValue] | None) -> None:
+        try:
+            visible_mode_hidden = (
+                self.collect_history_mode == "panel_visible" and not self.panel.isVisible()
+            )
+            if (
+                not self._closing
+                and generation == self._generation
+                and metrics is not None
+                and not visible_mode_hidden
+            ):
+                for metric in metrics:
+                    self._history_for(metric.key).append(metric.value)
+                history = {key: buffer.as_list() for key, buffer in self.history.items()}
+                self.panel.set_metrics(metrics, history)
+        except Exception:
+            logger.exception("Monitor display update failed; retrying on the next poll")
+        finally:
+            self._busy = False
+            if self._closing:
+                self.thread.quit()
+            elif self._pending_poll:
+                self._request_poll(explicit=True)
 
     def refresh_external_ip(self) -> None:
-        self.provider.force_external_ip_refresh()
+        if self._closing:
+            return
+        self._pending_refresh = True
         self.poll()
 
     def _history_for(self, key: str) -> HistoryBuffer:

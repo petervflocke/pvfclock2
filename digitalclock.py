@@ -61,6 +61,9 @@ class MainWindow(QMainWindow):
         self.app_config = app_config
         self.monitor_panel = MonitorPanel(app_config)
         self.monitor_controller = MonitorController(app_config, self.monitor_panel)
+        self._shutdown_started = False
+        self._shutdown_complete = False
+        self.monitor_controller.shutdown_finished.connect(self.finish_shutdown)
         # Create the main layout
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(win_margin, win_margin, win_margin, win_margin)
@@ -129,7 +132,7 @@ class MainWindow(QMainWindow):
         self.reloadConfigAction.setShortcutContext(Qt.ApplicationShortcut)
         self.addAction(self.reloadConfigAction)
         quitAction = QAction("E&xit", self, shortcut="Ctrl+Q",
-                triggered=QApplication.instance().quit)
+                triggered=self.close)
         quitAction.setShortcutContext(Qt.ApplicationShortcut)
         self.addAction(quitAction)
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
@@ -214,9 +217,21 @@ class MainWindow(QMainWindow):
         self.close()
 
     def closeEvent(self, event):
-        self.monitor_controller.stop()
+        if self._shutdown_complete:
+            super().closeEvent(event)
+            return
+        event.ignore()
+        if not self._shutdown_started:
+            self._shutdown_started = True
+            self.setEnabled(False)
+            self.monitor_panel.hide()
+            self.monitor_controller.stop()
+
+    def finish_shutdown(self):
+        self._shutdown_complete = True
         self.monitor_panel.close()
-        super().closeEvent(event)
+        self.close()
+        QApplication.instance().quit()
 
     def moveEvent(self, event):
         super().moveEvent(event)
